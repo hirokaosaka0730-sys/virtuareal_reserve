@@ -62,7 +62,7 @@ function amountNumber(value) { return Number(String(value || "").replace(/[^0-9]
 
 function hasFireOption(record) { return /アンティーク燭台3台[＋+].*着火|螺旋階段キャンドル(?:着火|点灯)|アンティークキャンドル点灯/.test(record.options || ""); }
 
-function monthlyTotals() { return Object.entries(Object.groupBy(reservations, (r) => r.date ? .slice(0, 7) || "未設定")).map(([month, items]) => [month, items.reduce((sum, item) => sum + amountNumber(item.amount), 0)]).sort(([a], [b]) => a.localeCompare(b)); }
+function monthlyTotals() { return Object.entries(Object.groupBy(reservations, (r) => r.date ?.slice(0, 7) || "未設定")).map(([month, items]) => [month, items.reduce((sum, item) => sum + amountNumber(item.amount), 0)]).sort(([a], [b]) => a.localeCompare(b)); }
 
 function nextAvailableSlot(date, omitId = "") { return reservationSlots.find((slot) => !reservations.some((record) => record.id !== omitId && record.date === date && record.slot === slot)) || reservationSlots.at(-1); }
 
