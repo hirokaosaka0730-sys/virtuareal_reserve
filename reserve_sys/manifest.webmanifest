@@ -1,0 +1,18 @@
+{
+  "name": "Studio VirtuaReal 予約管理",
+  "short_name": "VirtuaReal予約",
+  "description": "Studio VirtuaRealの予約・顧客管理アプリ",
+  "lang": "ja",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f6f1ed",
+  "theme_color": "#332333",
+  "icons": [
+    {
+      "src": "icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
