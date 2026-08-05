@@ -10,7 +10,7 @@ async function loadReservations() {
     const statusEl = $("#parseHint");
     if (statusEl) statusEl.textContent = "最新データを読み込み中...";
     try {
-        if (GAS_API_URL && !GAS_API_URL.includes("ここに")) {
+if (GAS_API_URL) {
             const res = await fetch(GAS_API_URL);
             if (res.ok) {
                 const data = await res.json();
