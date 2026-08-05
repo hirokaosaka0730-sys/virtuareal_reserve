@@ -6,336 +6,145 @@ const reservationSlots = ["予約1", "予約2", "予約3"];
 let reservations = [];
 let editingId = null;
 
-// 日付形式の統一化 (2026/8/1, 2026年8月1日 -> 2026-08-01)
-function normalizeDateStr(dateStr) {
-  if (!dateStr) return "";
-  const match = String(dateStr).match(/(\d{4})[^\d]?(\d{1,2})[^\d]?(\d{1,2})/);
-  if (match) {
-    const [_, y, m, d] = match;
-    return `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
-  }
-  return String(dateStr).trim();
-}
-
-// データオブジェクトの正規化（スプシ・ローカルからの差分吸収）
-function normalizeRecord(record) {
-  const dateRaw = record.date || record.利用日 || record.日付 || "";
-  return {
-    id: record.id || "id_" + Math.random().toString(36).substring(2, 9),
-    date: normalizeDateStr(dateRaw),
-    slot: reservationSlots.includes(record.slot || record.予約枠 || record.枠) ? (record.slot || record.予約枠 || record.枠) : "予約1",
-    customer: record.customer || record.name || record.お名前 || record.氏名 || record.代表者名 || "予約あり",
-    time: record.time || record.利用時間 || record.時間 || "",
-    plan: record.plan || record.プラン || "",
-    amount: record.amount || record.合計金額 || record.金額 || "",
-    options: record.options || record.オプション || "",
-    memo: record.memo || record.メモ || "",
-    sourceText: record.sourceText || record.本文 || ""
-  };
-}
-
-// データ取得 (GAS / LocalStorage)
 async function loadReservations() {
-  const statusEl = $("#parseHint");
-  try {
-    if (GAS_API_URL) {
-      const res = await fetch(GAS_API_URL);
-      if (res.ok) {
-        const data = await res.json();
-        reservations = Array.isArray(data) ? data.map(normalizeRecord) : [];
-        localStorage.setItem(storageKey, JSON.stringify(reservations));
-        if (statusEl) statusEl.textContent = "スプレッドシートと同期しました。";
-        render();
-        return;
-      }
+    const statusEl = $("#parseHint");
+    if (statusEl) statusEl.textContent = "最新データを読み込み中...";
+    try {
+        if (GAS_API_URL && !GAS_API_URL.includes("ここに")) {
+            const res = await fetch(GAS_API_URL);
+            if (res.ok) {
+                const data = await res.json();
+                reservations = data.map((record) => ({...record, slot: reservationSlots.includes(record.slot) ? record.slot : "予約1" }));
+                localStorage.setItem(storageKey, JSON.stringify(reservations));
+                if (statusEl) statusEl.textContent = "スプレッドシートと同期しました。";
+                render();
+                return;
+            }
+        }
+    } catch (e) {
+        console.warn("GAS取得失敗。ローカルデータを使用します:", e);
     }
-  } catch (e) {
-    console.warn("GAS取得失敗:", e);
-  }
-  try {
-    const local = JSON.parse(localStorage.getItem(storageKey)) || [];
-    reservations = local.map(normalizeRecord);
-  } catch {
-    reservations = [];
-  }
-  if (statusEl) statusEl.textContent = "日付・氏名・時間・プラン・金額・オプションを自動抽出し、空いている予約番号へ配置します。";
-  render();
+    try {
+        reservations = (JSON.parse(localStorage.getItem(storageKey)) || []).map((record) => ({...record, slot: reservationSlots.includes(record.slot) ? record.slot : "予約1" }));
+    } catch {
+        reservations = [];
+    }
+    if (statusEl) statusEl.textContent = "オフラインまたはローカルデータで動作中";
+    render();
 }
 
-// データ保存 (GAS / LocalStorage)
-function saveReservations() {
-  localStorage.setItem(storageKey, JSON.stringify(reservations));
-  if (GAS_API_URL) {
-    fetch(GAS_API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain" },
-      body: JSON.stringify(reservations)
-    }).catch((e) => console.warn("GAS保存失敗:", e));
-  }
+async function saveReservations() {
+    localStorage.setItem(storageKey, JSON.stringify(reservations));
+    if (GAS_API_URL && !GAS_API_URL.includes("ここに")) {
+        const statusEl = $("#parseHint");
+        if (statusEl) statusEl.textContent = "スプレッドシートへ保存中...";
+        try {
+            await fetch(GAS_API_URL, {
+                method: "POST",
+                headers: { "Content-Type": "text/plain" },
+                body: JSON.stringify(reservations)
+            });
+            if (statusEl) statusEl.textContent = "保存・同期が完了しました。";
+        } catch (e) {
+            console.error("GAS保存失敗:", e);
+            if (statusEl) statusEl.textContent = "クラウド保存に失敗しました（ローカルのみ保存済）";
+        }
+    }
 }
 
-function amountNumber(val) {
-  if (typeof val === "number") return val;
-  if (!val) return 0;
-  const num = parseInt(String(val).replace(/[^0-9]/g, ""), 10);
-  return isNaN(num) ? 0 : num;
+function yen(value) { return value ? `¥${Number(String(value).replace(/[^0-9]/g, "")).toLocaleString()}` : ""; }
+
+function isoToday() { return new Date().toISOString().slice(0, 7); }
+
+function escapeHtml(value = "") { return String(value).replace(/[&<>'"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[c])); }
+
+function amountNumber(value) { return Number(String(value || "").replace(/[^0-9]/g, "")) || 0; }
+
+function hasFireOption(record) { return /アンティーク燭台3台[＋+].*着火|螺旋階段キャンドル(?:着火|点灯)|アンティークキャンドル点灯/.test(record.options || ""); }
+
+function monthlyTotals() { return Object.entries(Object.groupBy(reservations, (r) => r.date ? .slice(0, 7) || "未設定")).map(([month, items]) => [month, items.reduce((sum, item) => sum + amountNumber(item.amount), 0)]).sort(([a], [b]) => a.localeCompare(b)); }
+
+function nextAvailableSlot(date, omitId = "") { return reservationSlots.find((slot) => !reservations.some((record) => record.id !== omitId && record.date === date && record.slot === slot)) || reservationSlots.at(-1); }
+
+function extract(text) {
+    const normal = text.replace(/ /g, " ");
+    const dateMatch = normal.match(/(?:ご予約日時|利用日|ご予約日)[^\n]*\n?\s*(?:[■\[【]?\s*)?(20\d{2})[年/.]\s*(\d{1,2})[月/.]\s*(\d{1,2})日?/) || normal.match(/(20\d{2})[年/.]\s*(\d{1,2})[月/.]\s*(\d{1,2})日?/);
+    const fromForm = normal.match(/\[ご予約月\][\s\S]{0,80}?((?:20\d{2}年)?\s*\d{1,2})月[\s\S]{0,80}?\[ご予約日\][\s\S]{0,50}?(\d{1,2})日/);
+    const now = new Date();
+    const year = dateMatch ? .[1] || (fromForm ? .[1] ? .match(/20\d{2}/) ? .[0]) || String(now.getFullYear());
+    const month = dateMatch ? .[2] || fromForm ? .[1] ? .match(/(\d{1,2})\s*$/) ? .[1];
+    const day = dateMatch ? .[3] || fromForm ? .[2];
+    const date = month && day ? `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}` : "";
+    const field = (name) => normal.match(new RegExp(`\\[${name}\\]\\s*\\n?([\\s\\S]*?)(?=\\n\\s*\\[|$)`)) ? .[1] ? .trim() || "";
+    const firstLine = normal.split("\n").map((line) => line.trim().replace(/^[「\"]|[」\"]$/g, "")).find(Boolean) || "";
+    const name = normal.match(/^\s*([^\n]{2,30}?)\s*様/m) ? .[1] ? .trim() || field("お名前\\(代表者\\)").split("\n")[0] || firstLine;
+    const plan = normal.match(/■ご予約内容\s*\n([\s\S]*?)(?=\n\s*■|【合計|={3,})/) ? .[1] ? .trim() || field("ご希望プラン").split("\n")[0] || normal.match(/^.*プラン.*$/m) ? .[0] ? .trim() || "";
+    const time = normal.match(/(?:ご予約日時|利用時間)[\s\S]{0,120}?((?:[01]?\d|2[0-3])[:時]\d{0,2}\s*(?:〜|～|\-|−|–)\s*(?:[01]?\d|2[0-3])[:時]\d{0,2})/) ? .[1] || field("平日ご利用[^\]]+").split("\n")[0] || "";
+    const amount = normal.match(/(?:【\s*)?合計[：:]?\s*[￥¥]?\s*([\d,]+)/) ? .[1] || "";
+    const optionLines = normal.split("\n").map((line) => line.trim()).filter((line) => /キャンドル|駐車場|シャンデリア/.test(line) && !/\[|ご希望|着火ご希望/.test(line));
+    const options = normal.match(/■オプション追加\s*\n([\s\S]*?)(?=\n\s*【合計|\n\s*={3,}|\n\s*■)/) ? .[1] ? .replace(/・/g, "").trim() || field("オプション追加[^\]]*").replace(/\n+/g, "、") || optionLines.join("、");
+    const slot = "予約1";
+    return { id: crypto.randomUUID(), date, slot, customer: name, time, plan: plan.replace(/\n+/g, " "), amount: String(amount).replace(/,/g, ""), options, memo: "", sourceText: text };
 }
 
-function getDaysInMonth(year, month) {
-  const date = new Date(year, month - 1, 1);
-  const days = [];
-  while (date.getMonth() === month - 1) {
-    const yyyy = date.getFullYear();
-    const mm = String(date.getMonth() + 1).padStart(2, "0");
-    const dd = String(date.getDate()).padStart(2, "0");
-    const dayOfWeek = ["日", "月", "火", "水", "木", "金", "土"][date.getDay()];
-    days.push({ dateStr: `${yyyy}-${mm}-${dd}`, dayNum: date.getDate(), dayOfWeek });
-    date.setDate(date.getDate() + 1);
-  }
-  return days;
-}
+function monthDate() { const [year, month] = $("#monthPicker").value.split("-").map(Number); return { year, month }; }
 
-// カレンダー表示処理
 function render() {
-  const monthInput = $("#monthPicker");
-  if (!monthInput || !monthInput.value) return;
-  
-  const [yearStr, monthStr] = monthInput.value.split("-");
-  const year = parseInt(yearStr, 10);
-  const month = parseInt(monthStr, 10);
-  const days = getDaysInMonth(year, month);
-
-  const table = $("#scheduleTable");
-  if (!table) return;
-
-  const currentMonthStr = `${yearStr}-${monthStr}`;
-  const currentMonthReservations = reservations.filter(r => r.date && r.date.startsWith(currentMonthStr));
-  const monthTotalAmount = currentMonthReservations.reduce((sum, r) => sum + amountNumber(r.amount), 0);
-  const monthTotalEl = $("#monthTotal");
-  if (monthTotalEl) {
-    monthTotalEl.textContent = `${year}年${month}月 合計: ¥${monthTotalAmount.toLocaleString()}`;
-  }
-
-  const headerHtml = `<thead><tr><th>枠</th>${days.map(d => 
-    `<th class="${d.dayOfWeek === '土' ? 'sat' : d.dayOfWeek === '日' ? 'sun' : ''}">
-      <div>${d.dayNum}</div>
-      <div style="font-size: 0.75rem; font-weight: normal;">(${d.dayOfWeek})</div>
-    </th>`
-  ).join("")}</tr></thead>`;
-
-  const bodyHtml = `<tbody>${reservationSlots.map(slot => {
-    const cells = days.map(d => {
-      const match = reservations.find(r => r.date === d.dateStr && r.slot === slot);
-      if (match) {
-        return `<td class="has-reservation" onclick="openEditModal('${match.id}')">
-          <div class="reservation-card">
-            <strong class="card-name">${match.customer}</strong>
-            <span class="card-time">${match.time}</span>
-            <span class="card-plan">${match.plan}</span>
-            <span class="card-amount">${match.amount ? '¥' + amountNumber(match.amount).toLocaleString() : ''}</span>
-          </div>
-        </td>`;
-      }
-      return `<td class="empty-cell" onclick="openNewModal('${d.dateStr}', '${slot}')"></td>`;
-    }).join("");
-    return `<tr><th>${slot}</th>${cells}</tr>`;
-  }).join("")}</tbody>`;
-
-  table.innerHTML = headerHtml + bodyHtml;
+    const { year, month } = monthDate();
+    const days = new Date(year, month, 0).getDate();
+    const currentMonth = `${year}-${String(month).padStart(2, "0")}`;
+    const total = reservations.filter((r) => r.date ? .startsWith(currentMonth)).reduce((sum, item) => sum + amountNumber(item.amount), 0);
+    $("#monthTotal").textContent = `${year}年${month}月の合計：${yen(total) || "¥0"}`;
+    const grouped = Object.groupBy(reservations.filter((r) => r.date && r.date.startsWith(`${year}-${String(month).padStart(2, "0")}`)), (r) => `${r.date}:${r.slot}`);
+    let html = "<thead><tr><th>予約 / 日付</th>";
+    for (let day = 1; day <= days; day++) {
+        const date = new Date(year, month - 1, day);
+        const weekend = [0, 6].includes(date.getDay());
+        html += `<th class="${weekend ? "weekend-head" : ""}"><span class="date-number">${day}</span>${["日","月","火","水","木","金","土"][date.getDay()]}</th>`;
+    }
+    html += "</tr></thead><tbody>";
+    reservationSlots.forEach((slot) => {
+        html += `<tr><th class="row-label">${slot}</th>`;
+        for (let day = 1; day <= days; day++) {
+            const iso = `${year}-${String(month).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+            const weekend = [0, 6].includes(new Date(iso + "T00:00:00").getDay());
+            const entries = grouped[`${iso}:${slot}`] || [];
+            html += `<td class="${weekend ? "weekend" : ""}" data-date="${iso}" data-slot="${slot}">${entries.length ? entries.map(card).join("") : '<span class="empty-cell">＋</span>'}</td>`;
+        }
+        html += "</tr>";
+    });
+    $("#scheduleTable").innerHTML = html + "</tbody>";
 }
 
-function changeMonth(delta) {
-  const monthPicker = $("#monthPicker");
-  if (!monthPicker || !monthPicker.value) return;
-  const [y, m] = monthPicker.value.split("-").map(Number);
-  const d = new Date(y, m - 1 + delta, 1);
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  monthPicker.value = `${yyyy}-${mm}`;
+function card(r) { const fire = hasFireOption(r); const memo = r.memo ? .trim(); return `<article class="reservation-card ${fire ? "fire-option" : ""}"><button class="card-main" type="button" data-id="${r.id}"><strong class="card-name">${escapeHtml(r.customer || "お名前未入力")}</strong><span class="card-time">${escapeHtml(r.time || r.slot)}</span><span class="card-plan">${escapeHtml(r.plan || "予約内容を確認")}</span><span class="card-amount">${yen(r.amount)}</span>${memo ? `<span class="card-memo">備考：${escapeHtml(memo)}</span>` : ""}${fire ? '<span class="fire-badge">火気オプションあり</span>' : ""}</button></article>`; }
+function openDialog(record = {}) { const form = $("#reservationForm"); editingId = record.id || null; form.reset(); for (const [key,value] of Object.entries(record)) { if (form.elements[key]) form.elements[key].value = value; } $("#dialogTitle").textContent = editingId ? "予約内容を編集" : "予約を手動追加"; $("#deleteReservation").hidden = !editingId; $("#reservationDialog").showModal(); }
+async function persistFromForm() { const data = Object.fromEntries(new FormData($("#reservationForm"))); if (!data.date || !data.customer) return; if (editingId) reservations = reservations.map((r) => r.id === editingId ? { ...r, ...data } : r); else reservations.push({ id: crypto.randomUUID(), ...data }); render(); await saveReservations(); }
+
+$("#monthPicker").value = isoToday();
+loadReservations();
+
+$("#parseReservation").addEventListener("click", async () => {
+  const value = $("#reservationText").value.trim();
+  if (!value) return;
+  const parsed = extract(value);
+  if (!parsed.date) {
+    $("#parseHint").textContent = "利用日を読み取れませんでした。確認画面で日付を入力してください。";
+    return openDialog(parsed);
+  }
+  parsed.slot = nextAvailableSlot(parsed.date);
+  reservations.push(parsed);
+  $("#monthPicker").value = parsed.date.slice(0, 7);
+  $("#reservationText").value = "";
   render();
-}
-
-// --- 高精度メール本文解析ロジック ---
-function parseReservationText(text) {
-  if (!text) return null;
-
-  // 日付の解析
-  let date = "";
-  const dateMatch = text.match(/(?:利用日時?|ご予約日時?|日時?|利用日)[:：\s]*.*?(\d{4})[年\/.-](\d{1,2})[月\/.-](\d{1,2})/i) ||
-                    text.match(/(\d{4})[年\/.-](\d{1,2})[月\/.-](\d{1,2})/);
-  if (dateMatch) {
-    date = `${dateMatch[1]}-${dateMatch[2].padStart(2, "0")}-${dateMatch[3].padStart(2, "0")}`;
-  } else {
-    const today = new Date();
-    date = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-  }
-
-  // お名前の解析
-  let customer = "";
-  const nameMatch = text.match(/(?:代表者氏名|代表者名|お名前|氏名|ご予約者)[:：\s]*([^\n\r]+)/i);
-  if (nameMatch) {
-    customer = nameMatch[1].replace(/様|さん/g, "").trim();
-  }
-
-  // 時間の解析
-  let time = "";
-  const timeMatch = text.match(/(?:利用時間|時間)[:：\s]*([^\n\r]+)/i) ||
-                    text.match(/(\d{1,2}[:：]\d{2}\s*〜\s*\d{1,2}[:：]\d{2})/);
-  if (timeMatch) {
-    time = timeMatch[1].trim();
-  }
-
-  // プランの解析
-  let plan = "";
-  const planMatch = text.match(/(?:ご利用プラン|プラン|コース)[:：\s]*([^\n\r]+)/i);
-  if (planMatch) {
-    plan = planMatch[1].trim();
-  }
-
-  // 金額の解析
-  let amount = "";
-  const amountMatch = text.match(/(?:合計金額|請求金額|金額|利用料金)[:：\s]*[¥￥]?([\d,]+)/i);
-  if (amountMatch) {
-    amount = amountMatch[1].replace(/,/g, "");
-  }
-
-  // 空いている予約枠（予約1〜3）を自動設定
-  let slot = "予約1";
-  if (date) {
-    const usedSlots = reservations.filter(r => r.date === date).map(r => r.slot);
-    const available = reservationSlots.find(s => !usedSlots.includes(s));
-    if (available) slot = available;
-  }
-
-  return { date, slot, customer, time, plan, amount, options: "", memo: "", sourceText: text };
-}
-
-// モーダル操作
-window.openNewModal = function(dateStr, slotStr, initialData = {}) {
-  editingId = null;
-  const form = $("#reservationForm");
-  if (!form) return;
-  form.reset();
-  if (form.elements["date"]) form.elements["date"].value = initialData.date || dateStr || "";
-  if (form.elements["slot"]) form.elements["slot"].value = initialData.slot || slotStr || "予約1";
-  if (form.elements["customer"]) form.elements["customer"].value = initialData.customer || "";
-  if (form.elements["time"]) form.elements["time"].value = initialData.time || "";
-  if (form.elements["plan"]) form.elements["plan"].value = initialData.plan || "";
-  if (form.elements["amount"]) form.elements["amount"].value = initialData.amount || "";
-  if (form.elements["options"]) form.elements["options"].value = initialData.options || "";
-  if (form.elements["memo"]) form.elements["memo"].value = initialData.memo || "";
-  if (form.elements["sourceText"]) form.elements["sourceText"].value = initialData.sourceText || "";
-
-  const dialog = $("#reservationDialog");
-  if (dialog && dialog.showModal) dialog.showModal();
-};
-
-window.openEditModal = function(id) {
-  editingId = id;
-  const item = reservations.find(r => r.id === id);
-  if (!item) return;
-  const form = $("#reservationForm");
-  if (!form) return;
-  form.reset();
-  if (form.elements["date"]) form.elements["date"].value = item.date || "";
-  if (form.elements["slot"]) form.elements["slot"].value = item.slot || "予約1";
-  if (form.elements["customer"]) form.elements["customer"].value = item.customer || "";
-  if (form.elements["time"]) form.elements["time"].value = item.time || "";
-  if (form.elements["plan"]) form.elements["plan"].value = item.plan || "";
-  if (form.elements["amount"]) form.elements["amount"].value = item.amount || "";
-  if (form.elements["options"]) form.elements["options"].value = item.options || "";
-  if (form.elements["memo"]) form.elements["memo"].value = item.memo || "";
-  if (form.elements["sourceText"]) form.elements["sourceText"].value = item.sourceText || "";
-
-  const dialog = $("#reservationDialog");
-  if (dialog && dialog.showModal) dialog.showModal();
-};
-
-document.addEventListener("DOMContentLoaded", () => {
-  const monthPicker = $("#monthPicker");
-  if (monthPicker && !monthPicker.value) {
-    const today = new Date();
-    const yyyy = today.getFullYear();
-    const mm = String(today.getMonth() + 1).padStart(2, "0");
-    monthPicker.value = `${yyyy}-${mm}`;
-  }
-  if (monthPicker) monthPicker.addEventListener("change", render);
-
-  const prevBtn = $("#previousMonth");
-  if (prevBtn) prevBtn.addEventListener("click", () => changeMonth(-1));
-
-  const nextBtn = $("#nextMonth");
-  if (nextBtn) nextBtn.addEventListener("click", () => changeMonth(1));
-
-  // メール読み取り「内容を確認する」ボタン処理
-  const parseBtn = $("#parseReservation");
-  if (parseBtn) {
-    parseBtn.addEventListener("click", () => {
-      const text = $("#reservationText")?.value;
-      if (!text || !text.trim()) {
-        alert("予約メールの本文を貼り付けてから「内容を確認する」を押してください。");
-        return;
-      }
-      const parsed = parseReservationText(text);
-      openNewModal(parsed.date, parsed.slot, parsed);
-    });
-  }
-
-  // ダイアログ閉じるボタン
-  document.querySelectorAll("[data-dialog-cancel]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const dialog = $("#reservationDialog");
-      if (dialog && dialog.close) dialog.close();
-    });
-  });
-
-  // フォーム保存（保存ボタン）
-  const form = $("#reservationForm");
-  if (form) {
-    form.addEventListener("submit", (e) => {
-      e.preventDefault();
-      const formData = new FormData(form);
-      const dataObj = normalizeRecord({
-        id: editingId || "id_" + Date.now(),
-        date: formData.get("date"),
-        slot: formData.get("slot"),
-        customer: formData.get("customer"),
-        time: formData.get("time"),
-        plan: formData.get("plan"),
-        amount: formData.get("amount"),
-        options: formData.get("options"),
-        memo: formData.get("memo"),
-        sourceText: formData.get("sourceText")
-      });
-
-      if (editingId) {
-        const idx = reservations.findIndex(r => r.id === editingId);
-        if (idx !== -1) reservations[idx] = dataObj;
-      } else {
-        reservations.push(dataObj);
-      }
-
-      saveReservations();
-      render();
-      const dialog = $("#reservationDialog");
-      if (dialog && dialog.close) dialog.close();
-    });
-  }
-
-  // 削除ボタン
-  const delBtn = $("#deleteReservation");
-  if (delBtn) {
-    delBtn.addEventListener("click", () => {
-      if (!editingId) return;
-      if (confirm("この予約を削除してもよろしいですか？")) {
-        reservations = reservations.filter(r => r.id !== editingId);
-        saveReservations();
-        render();
-        const dialog = $("#reservationDialog");
-        if (dialog && dialog.close) dialog.close();
-      }
-    });
-  }
-
-  loadReservations();
+  await saveReservations();
 });
+$("#reservationForm").addEventListener("submit", async (event) => { if (event.submitter?.value === "cancel") return; event.preventDefault(); await persistFromForm(); $("#reservationDialog").close(); });
+document.querySelectorAll("[data-dialog-cancel]").forEach((button) => button.addEventListener("click", () => $("#reservationDialog").close()));
+$("#newReservation").addEventListener("click", () => { const date = `${$("#monthPicker").value}-01`; openDialog({ date, slot: nextAvailableSlot(date), sourceText:"" }); });
+$("#scheduleTable").addEventListener("click", (event) => { const button = event.target.closest("[data-id]"); if (button) return openDialog(reservations.find((r) => r.id === button.dataset.id)); const cell = event.target.closest("td[data-date]"); if (cell) openDialog({ date: cell.dataset.date, slot: cell.dataset.slot }); });
+$("#deleteReservation").addEventListener("click", async () => { reservations = reservations.filter((r) => r.id !== editingId); render(); $("#reservationDialog").close(); await saveReservations(); });
+$("#monthPicker").addEventListener("change", render); ["previousMonth","nextMonth"].forEach((id) => $("#"+id).addEventListener("click", () => { const d = new Date($("#monthPicker").value + "-01T00:00:00"); d.setMonth(d.getMonth() + (id === "nextMonth" ? 1 : -1)); $("#monthPicker").value = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`; render(); }));
+$("#downloadCsv").addEventListener("click", () => { const rows = [["利用日","枠","お名前","利用時間","プラン","合計金額","オプション","メモ"], ...reservations.map((r) => [r.date,r.slot,r.customer,r.time,r.plan,r.amount,r.options,r.memo]), [], ["月別合計","合計金額"], ...monthlyTotals().map(([month,total]) => [month, total])]; download("予約台帳.csv", "\uFEFF" + rows.map((row) => row.map((v) => `"${String(v||"").replaceAll('"','""')}"`).join(",")).join("\n"), "text/csv"); });
+$("#downloadJson").addEventListener("click", () => download("予約台帳バックアップ.json", JSON.stringify(reservations, null, 2), "application/json"));
+$("#restoreJson").addEventListener("change", async (event) => { const file = event.target.files[0]; if (!file) return; try { const imported = JSON.parse(await file.text()); if (!Array.isArray(imported)) throw new Error(); reservations = imported; render(); await saveReservations(); } catch { alert("予約データのJSONファイルを選択してください。"); } event.target.value = ""; });
+function download(name, text, type) { const url = URL.createObjectURL(new Blob([text], { type })); const a = document.createElement("a"); a.href=url; a.download=name; a.click(); URL.revokeObjectURL(url); }
