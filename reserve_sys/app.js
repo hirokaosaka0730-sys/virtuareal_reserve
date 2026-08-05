@@ -1,5 +1,5 @@
 const storageKey = "pds-reservations-v1";
-const GAS_API_URL = "https://script.google.com/macros/s/AKfycbwLHn3kjt3-IWjCiEoqP1Cf09HN-W5tw4wwnpIhOx26LTVEUrOUutPWyiWSXukz4EKJXA/exec;
+const GAS_API_URL = "https://script.google.com/macros/s/AKfycbwLHn3kjt3-IWjCiEoqP1Cf09HN-W5tw4wwnpIhOx26LTVEUrOUutPWyiWSXukz4EKJXA/exec";
 
 const $ = (selector) => document.querySelector(selector);
 const reservationSlots = ["予約1", "予約2", "予約3"];
